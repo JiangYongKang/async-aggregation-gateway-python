@@ -3,8 +3,6 @@
 import asyncio
 import logging
 
-import pytest
-
 from gateway import AggregationService, Reason, Settings
 from gateway.upstream import FakeUpstream
 
@@ -12,14 +10,14 @@ log = logging.getLogger("test.gateway")
 
 
 def make_service(**overrides) -> tuple[AggregationService, FakeUpstream]:
-    defaults = dict(
-        cache_ttl=0.2,
-        stale_ttl=1.0,
-        upstream_timeout=0.15,
-        max_concurrent=2,
-        max_queue=2,
-        queue_timeout=0.2,
-    )
+    defaults = {
+        "cache_ttl": 0.2,
+        "stale_ttl": 1.0,
+        "upstream_timeout": 0.15,
+        "max_concurrent": 2,
+        "max_queue": 2,
+        "queue_timeout": 0.2,
+    }
     defaults.update(overrides)
     upstream = FakeUpstream(latency=0.02)
     return AggregationService(Settings(**defaults), upstream), upstream

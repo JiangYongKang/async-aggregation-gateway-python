@@ -1,7 +1,7 @@
 """对外结果与原因定义。"""
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class Reason(enum.Enum):
@@ -16,6 +16,7 @@ class Reason(enum.Enum):
     MALFORMED_RESPONSE = "malformed_response"
     QUEUE_FULL = "queue_full"          # 排队名额已满，快速拒绝
     QUEUE_TIMEOUT = "queue_timeout"    # 排队超时
+    CIRCUIT_OPEN = "circuit_open"      # 连续失败触发短路，冷却中不穿透上游
     CANCELLED = "cancelled"            # 客户端取消
 
 
