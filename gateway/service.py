@@ -1,8 +1,9 @@
-"""聚合查询服务：编排缓存、合并、限流与降级。"""
+"""聚合查询服务：编排缓存、短路、合并、限流与降级。"""
 
 import asyncio
 import time
 
+from gateway.breaker import Action, CircuitBreaker
 from gateway.cache import TtlCache
 from gateway.coalescer import RequestCoalescer
 from gateway.config import Settings
@@ -25,7 +26,7 @@ _REQUIRED_FIELDS = ("key", "value", "epoch")
 class AggregationService:
     """对外入口：query(key) -> QueryResult。
 
-    流程：新鲜缓存 -> 同键合并 -> (限流 + 超时) 上游调用 ->
+    流程：新鲜缓存 -> 短路检查 -> 同键合并 -> (限流 + 超时) 上游调用 ->
     成功写缓存 / 失败按类型归一化，优先回退陈旧数据。
     """
 
@@ -36,6 +37,9 @@ class AggregationService:
         self.coalescer = RequestCoalescer()
         self.limiter = ConcurrencyLimiter(
             settings.max_concurrent, settings.max_queue, settings.queue_timeout
+        )
+        self.breaker = CircuitBreaker(
+            settings.failure_threshold, settings.cooldown
         )
 
     async def _fetch_bounded(self, key: str) -> dict:
@@ -50,6 +54,26 @@ class AggregationService:
             raise MalformedResponseError(
                 f"missing fields: expect {_REQUIRED_FIELDS}, got {sorted(payload)}"
             )
+        return payload
+
+    async def _flight_call(self, key: str, is_probe: bool) -> dict:
+        """flight 任务体：上游调用 + 短路成败记录 + 成功写缓存。
+
+        写缓存与短路计数都在 flight 内完成，与等待者数量无关：
+        - 共享调用最终成功即写缓存，发起者/等待者中途取消不会丢结果；
+        - 一次上游失败只计一次（取消与本地背压不计入短路）；
+        - 恢复试探结束时释放试探名额（probe_done 幂等）。
+        """
+        try:
+            payload = await self._fetch_bounded(key)
+        except (TimeoutError, UpstreamError, MalformedResponseError):
+            self.breaker.on_failure(key)
+            raise
+        finally:
+            if is_probe:
+                self.breaker.probe_done(key)
+        self.cache.put(key, payload)
+        self.breaker.on_success(key)
         return payload
 
     def _stale_or(
@@ -81,9 +105,21 @@ class AggregationService:
                 payload=fresh,
                 served_at=time.time(),
             )
+        decision = self.breaker.check(key)
+        if decision.action is Action.REJECT:
+            # 短路快速拒绝：不穿透、不写缓存、不计入失败次数；有陈旧数据则降级
+            return self._stale_or(
+                key, Reason.CIRCUIT_OPEN,
+                f"circuit open after {self.settings.failure_threshold} "
+                f"consecutive upstream failures; "
+                f"retry in {decision.retry_after:.2f}s",
+            )
+        # check 与 coalescer.run 之间无 await：保证 PROBE/JOIN 判定与
+        # flight 创建/合并在同一事件循环步内完成，恢复瞬间不会放进第二个试探
+        is_probe = decision.action is Action.PROBE
         try:
             payload, shared = await self.coalescer.run(
-                key, lambda: self._fetch_bounded(key)
+                key, lambda: self._flight_call(key, is_probe)
             )
         except asyncio.CancelledError:
             # 共享 flight 被外部取消（如服务关闭）而本任务并未被取消时，归一化为 CANCELLED
@@ -117,8 +153,6 @@ class AggregationService:
         except MalformedResponseError as exc:
             return self._stale_or(key, Reason.MALFORMED_RESPONSE, str(exc))
 
-        if not shared:
-            self.cache.put(key, payload)
         return QueryResult(
             ok=True,
             reason=Reason.COALESCED if shared else Reason.FRESH,

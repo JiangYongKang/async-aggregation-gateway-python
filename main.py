@@ -19,6 +19,7 @@ _STATUS_BY_REASON = {
     Reason.UPSTREAM_ERROR: 502,
     Reason.MALFORMED_RESPONSE: 502,
     Reason.CANCELLED: 499,
+    Reason.CIRCUIT_OPEN: 503,
 }
 
 

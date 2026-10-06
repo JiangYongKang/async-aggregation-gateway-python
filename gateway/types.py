@@ -17,6 +17,7 @@ class Reason(enum.Enum):
     QUEUE_FULL = "queue_full"          # 排队名额已满，快速拒绝
     QUEUE_TIMEOUT = "queue_timeout"    # 排队超时
     CANCELLED = "cancelled"            # 客户端取消
+    CIRCUIT_OPEN = "circuit_open"      # 连续失败触发短路，冷却期内快速拒绝
 
 
 @dataclass(frozen=True)

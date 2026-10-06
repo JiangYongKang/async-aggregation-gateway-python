@@ -13,3 +13,5 @@ class Settings:
     max_concurrent: int = 4           # 同时访问上游的最大并发数
     max_queue: int = 8                # 排队等待名额，超出即快速拒绝
     queue_timeout: float = 5.0        # 排队最长等待时间
+    failure_threshold: int = 3        # 同一key连续上游失败达到此次数后短路
+    cooldown: float = 10.0            # 短路冷却时间，到期后放行单个恢复试探
